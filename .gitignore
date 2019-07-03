@@ -1,0 +1,5 @@
+*.o
+*.so
+start
+*.a
+*.swp
