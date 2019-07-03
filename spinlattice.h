@@ -63,7 +63,7 @@ public:
         this->lattice = rhs.get_nodes();
     }
 
-    Solver(double _T = 273.0, double average = 0.0, double sigma = 0.1):
+    Solver(double _T = 273.0, double average = 0.0, double sigma = 1):
         randomDevice(),
         randomEngine(randomDevice()),
         gauss(average,sigma),uniform(-1.0,1.0),all_angles(-M_PI,M_PI),T(_T){
@@ -173,6 +173,19 @@ public:
         }
     }
 
+    void randomize_state(const std::normal_distribution<>::param_type& p){
+        for (auto& node : lattice.nodes){
+            Quaternion::rotate(node,uniform(randomEngine),uniform(randomEngine),uniform(randomEngine),gauss(randomEngine,p));
+            auto norm = Vector::square_norm(node);
+            if(abs(norm - 1.0) > 1e-5) node=(1.0/norm)*node;
+        }
+    }
+
+    void randomize_state2(const std::normal_distribution<>::param_type& p){
+        randomize_state(p);
+        lattice.nodes[0] = 1.0;
+    }
+
     void random_state(){
         for (auto& node : lattice.nodes){
             Quaternion::rotate(node,uniform(randomEngine),uniform(randomEngine),uniform(randomEngine),uniform(randomEngine,all_angles));
@@ -192,6 +205,19 @@ public:
         for(const auto& interaction : hamiltonian)
             E += std::get<2>(interaction)*(lattice.nodes[std::get<0>(interaction)]*lattice.nodes[std::get<1>(interaction)]);
         return E;
+    }
+
+    Vector mean(){
+        Vector mean;
+        double mean_angle = 0;
+        for (auto& node : lattice.nodes){
+            mean += node/N;
+        }
+        for (const auto& inter : hamiltonian){
+            mean_angle += (lattice.nodes[std::get<0>(inter)]*lattice.nodes[std::get<1>(inter)])/hamiltonian.size();
+        }
+        std::cout<<"mean angle = "<<acos(mean_angle)<<"      "<<mean_angle<<std::endl;
+        return mean;
     }
 /*
     static double measure(const std::bitset<N>& stateI, const std::bitset<N>& stateJ){
