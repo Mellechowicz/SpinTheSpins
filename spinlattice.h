@@ -15,13 +15,16 @@
 #include <memory>
 #include <limits>
 #include <type_traits>
+#include <algorithm>
 
 #include "asa.h"
 #include "arithmeticvector.h"
+#include "quaternion.h"
 
 namespace metropolis{
 
-typedef celerium::ArithmeticVector Vector;
+typedef celerium::ArithmeticVector   Vector;
+typedef rotation::Quaternion<Vector> Quaternion;
 
 template<size_t N> double spinEnergy (void*  state);
 template<size_t N> double spinMeasure(void*  stateI,
@@ -31,125 +34,77 @@ template<size_t N> void   spinStep   (const  gsl_rng* random,
                                       double step);
 template<size_t N> void   spinPrint  (void*  state);
 
-template<size_t N, class Model>
+template<size_t N>
 struct SpinLattice{
-    SpinLattice() = delete;
-    SpinLattice(const SpinLattice& rhs);
-    SpinLattice& operator=(const SpinLattice& rhs);
-    SpinLattice(const std::array<Quaternion,N>& _nodes);
-
-    std::array<Quaternion,N> nodes;
-};
-
-class AbstractIsingModel{
-public:
-    virtual ~AbstractIsingModel() = 0;
+    SpinLattice(){};
+    SpinLattice(const SpinLattice& rhs):nodes(rhs.nodes){};
+    SpinLattice(const std::array<Vector,N>& _nodes){
+         std::copy(_nodes.begin(),_nodes.end(),nodes.begin());
+    }
+    SpinLattice& operator=(const SpinLattice& rhs){
+        nodes = rhs.nodes;
+        return *this;
+    }
+    void set_nodes(const std::array<Vector,N>& _nodes){
+         std::copy(_nodes.begin(),_nodes.end(),nodes.begin());
+    }
+    std::array<Vector,N> nodes;
+    friend std::ostream& operator<<(std::ostream& stream, const SpinLattice& lattice){
+        for (const auto& node : lattice.nodes)
+            stream<<node<<std::endl;
+        return stream;
+    }
 };
 
 template<size_t N>
-class IsingModel : public AbstractIsingModel{
+class Solver{
 public:
-    IsingModel(bool QUICK_START=true):
-        randomDevice(),
-        randomEngine(std::make_shared<std::mt19937>(randomDevice())),
-        uniform(std::make_shared<
-                std::uniform_int_distribution<
-                unsigned long long int>>(
-                    std::numeric_limits<
-                    unsigned long long int>::min(),
-                    std::numeric_limits<
-                    unsigned long long int>::max())),
-        lattice(randomEngine,uniform,this){
-            if(QUICK_START) hamiltonian.reserve(N*N/2); // maximum number of interactions ( each site with each )
-            else        hamiltonian.reserve(N);     // minimum number of interactions ( once  per each site )
+    Solver(const Solver& rhs):Solver(){
+        this->lattice = rhs.get_nodes();
+    }
 
-            solver.set_energy (  isingEnergy<N> );
-            solver.set_measure( isingMeasure<N> );
-            solver.set_step   (    isingStep<N> );
+    Solver(double _T = 273.0, double average = 0.0, double sigma = 0.1):
+        randomDevice(),
+        randomEngine(randomDevice()),
+        gauss(average,sigma),uniform(-1.0,1.0),all_angles(-M_PI,M_PI),T(_T){
+        hamiltonian.reserve(N*N/2); // maximum number of interactions ( each site with each )
+
+//            solver.set_energy (  isingEnergy<N> );
+//            solver.set_measure( isingMeasure<N> );
+//            solver.set_step   (    isingStep<N> );
 #ifdef _VERBOSE
-            solver.set_print  (   isingPrint<N> );
+//            solver.set_print  (   isingPrint<N> );
 #endif
         }
 
-    ~IsingModel() override {}
+    Solver& operator=(const Solver& rhs){
+        lattice = rhs.get_nodes();
+        return *this;
+    }
+    ~Solver(){}
 
     typedef std::tuple<unsigned,unsigned,double>  TwoSiteInteraction;
     typedef std::vector<TwoSiteInteraction>       HamiltonianType;
-    typedef             VectorType;
 
 protected:
     std::random_device                              randomDevice;
-    std::shared_ptr<std::mt19937>                   randomEngine;
-    std::shared_ptr<std::uniform_int_distribution
-                         <unsigned long long int>>    uniform;
-    LatticeType<N,IsingModel>                         lattice;
+    std::mt19937                   randomEngine;
+    std::normal_distribution<>                      gauss;
+    std::uniform_real_distribution<>                uniform;
+    std::uniform_real_distribution<>::param_type    all_angles;
 
-    gsl::SimulatedAnnealing                           solver;
-    HamiltonianType                                   hamiltonian;
+    double T;
 
-    std::array<VectorType,3>                          basis;
-    std::vector<std::tuple<size_t,VectorType,double>> supercell;
+    SpinLattice<N>                                  lattice;
 
-    size_t                                            referencePoint;
-
-    const std::bitset<N>*                             mask;
+//    gsl::SimulatedAnnealing                         solver;
+    HamiltonianType                                 hamiltonian;
 
 public:
-    typename gsl::SimulatedAnnealing::Parameters&
-    set_parameters(const typename gsl::SimulatedAnnealing::Parameters& _params){
-            return solver.set_parameters(_params);
-    }
-
-    void set_basis(const std::array<VectorType,3>& _basis){
-        basis = _basis;
-    }
-
-    void set_supercell(const std::vector<std::tuple<size_t,VectorType,double>>& _supercell){
-        supercell = _supercell;
-    }
-
-    void set_reference(size_t _reference){
-        referencePoint = _reference;
-    }
-
-    static unsigned randomize(std::bitset<N>& state, 
-                              std::shared_ptr<std::mt19937>& randomEngine,
-                              std::shared_ptr<
-                              std::uniform_int_distribution
-                                   <unsigned long long int>>& uniform,
-                              const std::bitset<N>* mask=nullptr){ 
-        unsigned ones  = (*uniform)(*randomEngine)%static_cast<size_t>(sqrt(N));
-        unsigned zeros = N - ones;
-        std::string face(ones,'1');
-        face += std::string(zeros,'0');
-        std::shuffle(face.begin(),face.end(),*randomEngine);
-        state ^= std::bitset<N>(face);
-
-        if(mask != nullptr) state &= *mask; // if mask exist, don't flip marked spins
-
-        return 0;
-    }
-
-    static unsigned randomize(std::bitset<N>& state, 
-                              std::mt19937& randomEngine,
-                              size_t maxNumberOfFlips=
-                                     static_cast<size_t>(1.0+2.0*log(N)),
-                              const std::bitset<N>* mask=nullptr){ 
-        unsigned ones  = std::min(maxNumberOfFlips,N);
-        unsigned zeros = N - ones;
-        std::string face(ones,'1');
-        face += std::string(zeros,'0');
-        std::shuffle(face.begin(),face.end(),randomEngine);
-        state ^= std::bitset<N>(face);
-
-        if(mask != nullptr) state &= *mask; // if mask exist, don't flip marked spins
-
-        return 0;
-    }
-
-    const std::bitset<N>* get_mask() const{
-        return mask;
-    }
+//    typename gsl::SimulatedAnnealing::Parameters&
+//    set_parameters(const typename gsl::SimulatedAnnealing::Parameters& _params){
+//            return solver.set_parameters(_params);
+//    }
 
 protected:
     // For SFINAE compiler-time evaulation
@@ -187,8 +142,20 @@ public:
             hamiltonian.push_back(interaction);
     }
 
-    std::bitset<N>* get_nodes_ptr(){
-        return &(lattice.nodes);
+    const SpinLattice<N>& get_nodes()const{
+        return lattice;
+    }
+
+    SpinLattice<N>& get_nodes(){
+        return lattice;
+    }
+
+    SpinLattice<N>* get_nodes_ptr(){
+        return &lattice;
+    }
+    
+    void set_nodes(const std::array<Vector,N>& _nodes){
+         lattice.set_nodes(_nodes); 
     }
 
     void clear_hamiltonian(){
@@ -201,35 +168,32 @@ public:
     }
 
     void randomize_state(){
-        IsingModel<N>::generate_state(lattice.nodes,*(lattice.randomEngine),*(lattice.uniform));
+        for (auto& node : lattice.nodes){
+            Quaternion::rotate(node,uniform(randomEngine),uniform(randomEngine),uniform(randomEngine),gauss(randomEngine));
+        }
     }
 
-    const std::bitset<N>& get_nodes() const{
-        return lattice.nodes;
+    void random_state(){
+        for (auto& node : lattice.nodes){
+            Quaternion::rotate(node,uniform(randomEngine),uniform(randomEngine),uniform(randomEngine),uniform(randomEngine,all_angles));
+        }
     }
 
     const HamiltonianType& get_hamiltonian() const{
         return hamiltonian;
     }
 
-    std::bitset<N>& get_nodes(){
-        return lattice.nodes;
-    }
-
-    friend std::ostream& operator<<(std::ostream& stream, const IsingModel& model){
+    friend std::ostream& operator<<(std::ostream& stream, const Solver& model){
         return stream<<model.get_nodes();
     }
-
-    static double energy(const LatticeType<N,IsingModel>* state){
+    
+    double energy(){
         double E = 0.0;
-        for(const auto& interaction : state->model->get_hamiltonian()){
-            E += std::get<2>(interaction)
-                *(state->nodes[std::get<0>(interaction)]-0.5)
-                *(state->nodes[std::get<1>(interaction)]-0.5);
-        }
+        for(const auto& interaction : hamiltonian)
+            E += std::get<2>(interaction)*(lattice.nodes[std::get<0>(interaction)]*lattice.nodes[std::get<1>(interaction)]);
         return E;
     }
-
+/*
     static double measure(const std::bitset<N>& stateI, const std::bitset<N>& stateJ){
         std::bitset<N> output = ~stateI & stateJ;
         return output.count();
@@ -281,9 +245,9 @@ public:
             state  |= std::bitset<N>(distribution(engine));
             currentSize += seedSize;
         }
-    }
+    }*/
 }; // end of class IsingModel
-
+/*
 template<size_t N>
 double isingEnergy (void* state){
     return IsingModel<N>::energy(static_cast<LatticeType<N,IsingModel<N>>*>(state));
@@ -311,39 +275,6 @@ template<size_t N>
 void   isingPrint  (void* state){
     std::cout<<'\t'<<static_cast<LatticeType<N,IsingModel<N>>*>(state)->nodes;
 }
-
-template<size_t N, class Model>
-LatticeType<N,Model>::LatticeType(const LatticeType<N,Model>& rhs){
-    randomEngine = rhs.randomEngine;
-    uniform      = rhs.uniform;
-    nodes        = rhs.nodes;
-    model        = rhs.model;
-}
-
-template<size_t N, class Model>
-LatticeType<N,Model>& LatticeType<N,Model>::operator=(const LatticeType<N,Model>& rhs){
-    randomEngine = rhs.randomEngine;
-    uniform      = rhs.uniform;
-    nodes        = rhs.nodes;
-    model        = rhs.model;
-}
-
-template<size_t N, class Model>
-LatticeType<N,Model>::LatticeType(
-        std::shared_ptr<std::mt19937>& _randomEngine,
-        std::shared_ptr<
-          std::uniform_int_distribution
-               <unsigned long long int>>& _uniform,
-        const Model* _model,
-        std::bitset<N>* _nodes):randomEngine(_randomEngine),
-                             uniform(_uniform),
-                             model(_model){
-        if (_nodes == nullptr)                                 
-          IsingModel<N>::generate_state(nodes,*_randomEngine,*_uniform);    
-        else
-          nodes = *_nodes;
-    }
-
-} //end of namespace ising
-
+*/
+} // end namespace metropolis
 #endif

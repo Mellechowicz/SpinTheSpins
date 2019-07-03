@@ -31,7 +31,9 @@ namespace rotation{
                 Quaternion(Vector&  versor, T&  theta     ):s(cos(theta/2.0)),v(versor.versor()*sin(theta/2.0)){}
                 Quaternion(Vector&& versor, T&& theta=M_PI):s(cos(theta/2.0)),v(versor.versor()*sin(theta/2.0)){}
                 Quaternion(Vector&  versor, T&& theta=M_PI):s(cos(theta/2.0)),v(versor.versor()*sin(theta/2.0)){}
-                Quaternion(const T& x,const T& y,const T& z,const T&& theta):s(cos(theta/2.0)),v(Vector(x,y,z).versor()*sin(theta/2.0)){}
+                Quaternion(const T&  x,const T&  y,const T&  z,const T&  theta):s(cos(theta/2.0)),v(Vector(x,y,z).versor()*sin(theta/2.0)){}
+                Quaternion(const T&  x,const T&  y,const T&  z,const T&& theta):s(cos(theta/2.0)),v(Vector(x,y,z).versor()*sin(theta/2.0)){}
+                Quaternion(const T&& x,const T&& y,const T&& z,const T&& theta):s(cos(theta/2.0)),v(Vector(x,y,z).versor()*sin(theta/2.0)){}
 
                 // Operators
                 T  operator[](int n) const{ //element value
@@ -102,6 +104,11 @@ namespace rotation{
                 }
                 static void rotate(Vector& vec, const Vector& axis, const T& angle){
                     Quaternion q (axis,angle);
+                    vec = (q*Quaternion(0.0,vec)*(!q)).get_vector();
+                }
+                static void rotate(Vector& vec, const T&& x, const T&& y,
+                                                const T&& z, const T&& theta){
+                    Quaternion q(x,y,z,theta);
                     vec = (q*Quaternion(0.0,vec)*(!q)).get_vector();
                 }
                 void   rotateMe(Vector& vec) const{
